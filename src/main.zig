@@ -51,18 +51,29 @@ fn debugLog(ctx: ?*c_void, level: c_int, file: ?[*:0]const u8, line: c_int, msg:
     std.log.err("{} {}:{} {}", .{ level, file.?, line, msg });
 }
 
-fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*u32) callconv(.C) c_int {
+fn printCrtInfo(crt: *const c.mbedtls_x509_crt) void {
     var infoBuf = [_:0]u8{0} ** 1024;
-
-    // crt info
     const crt_prefix: [:0]const u8 = "crt info: ";
     var res = c.mbedtls_x509_crt_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), crt_prefix, crt);
     assert(res > 0);
     std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
 
+    if (crt.*.next) |next| {
+        printCrtInfo(next);
+    }
+}
+
+fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*u32) callconv(.C) c_int {
+    // crt info
+    printCrtInfo(crt.?);
+
+    // cert depth
+    std.log.err("depth: {}", .{cert_depth});
+
     // verify info
+    var infoBuf = [_:0]u8{0} ** 1024;
     const verify_prefix: [:0]const u8 = "verify info: ";
-    res = c.mbedtls_x509_crt_verify_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), verify_prefix, flags.?.*);
+    const res = c.mbedtls_x509_crt_verify_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), verify_prefix, flags.?.*);
     assert(res > 0);
     std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
     // only return non-zero on fatal error
@@ -78,13 +89,12 @@ pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena.allocator;
 
-    // need to alloc on heap since zig treats as opaque
+    // need to use a buffer since zig treats as opaque type
     // size taken from C
     const configSize: usize = 384;
-    var configBuf = try allocator.create([configSize]u8);
-    defer allocator.destroy(configBuf);
+    var configBuf: [configSize]u8 = undefined;
 
-    var ssl_config = @ptrCast(*c.mbedtls_ssl_config, configBuf);
+    var ssl_config = @ptrCast(*c.mbedtls_ssl_config, &configBuf);
     c.mbedtls_ssl_config_init(ssl_config);
     var res = c.mbedtls_ssl_config_defaults(ssl_config, c.MBEDTLS_SSL_IS_CLIENT, c.MBEDTLS_SSL_TRANSPORT_STREAM, c.MBEDTLS_SSL_PRESET_DEFAULT);
     if (res != 0) {
@@ -118,6 +128,7 @@ pub fn main() anyerror!void {
     if (res != 0) {
         return GeminiError.Unknown;
     }
+    printCrtInfo(&ca_chain);
     // TODO do I need a revocation list?
     const ca_crl: ?*c.mbedtls_x509_crl = null;
     c.mbedtls_ssl_conf_ca_chain(ssl_config, &ca_chain, ca_crl);
