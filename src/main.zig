@@ -47,6 +47,28 @@ const Request = struct {
 
 const GeminiError = error{Unknown};
 
+fn debugLog(ctx: ?*c_void, level: c_int, file: ?[*:0]const u8, line: c_int, msg: ?[*:0]const u8) callconv(.C) void {
+    std.log.err("{} {}:{} {}", .{ level, file.?, line, msg });
+}
+
+fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*u32) callconv(.C) c_int {
+    var infoBuf = [_:0]u8{0} ** 1024;
+
+    // crt info
+    const crt_prefix: [:0]const u8 = "crt info: ";
+    var res = c.mbedtls_x509_crt_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), crt_prefix, crt);
+    assert(res > 0);
+    std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
+
+    // verify info
+    const verify_prefix: [:0]const u8 = "verify info: ";
+    res = c.mbedtls_x509_crt_verify_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), verify_prefix, flags.?.*);
+    assert(res > 0);
+    std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
+    // only return non-zero on fatal error
+    return 0;
+}
+
 pub fn main() anyerror!void {
     // TODO take input instead
     const dest = "gemini.circumlunar.space/";
@@ -69,6 +91,8 @@ pub fn main() anyerror!void {
         return GeminiError.Unknown;
     }
     defer c.mbedtls_ssl_config_free(ssl_config);
+
+    c.mbedtls_ssl_conf_dbg(ssl_config, debugLog, null);
 
     // setup rng
     var entropy_ctx: c.mbedtls_entropy_context = undefined;
@@ -97,6 +121,8 @@ pub fn main() anyerror!void {
     // TODO do I need a revocation list?
     const ca_crl: ?*c.mbedtls_x509_crl = null;
     c.mbedtls_ssl_conf_ca_chain(ssl_config, &ca_chain, ca_crl);
+
+    c.mbedtls_ssl_conf_verify(ssl_config, verify, null);
 
     // create ssl context
     var ssl_ctx: c.mbedtls_ssl_context = undefined;
