@@ -15,6 +15,8 @@ pub fn build(b: *Builder) void {
     exe.setTarget(target);
     exe.linkLibC();
     exe.linkSystemLibrary("mbedtls");
+    exe.linkSystemLibrary("mbedcrypto");
+    exe.linkSystemLibrary("mbedx509");
     exe.setBuildMode(mode);
     exe.install();
 

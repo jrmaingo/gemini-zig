@@ -56,10 +56,6 @@ pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena.allocator;
 
-    var ssl_ctx: c.mbedtls_ssl_context = undefined;
-    c.mbedtls_ssl_init(&ssl_ctx);
-    defer c.mbedtls_ssl_free(&ssl_ctx);
-
     // need to alloc on heap since zig treats as opaque
     // size taken from C
     const configSize: usize = 384;
@@ -74,24 +70,7 @@ pub fn main() anyerror!void {
     }
     defer c.mbedtls_ssl_config_free(ssl_config);
 
-    const c_dest: [:0]const u8 = "gemini.circumlunar.space";
-    const c_port: [:0]const u8 = "1965";
-    res = c.mbedtls_ssl_set_hostname(&ssl_ctx, c_dest);
-    if (res != 0) {
-        return GeminiError.Unknown;
-    }
-
-    var socket: c.mbedtls_net_context = undefined;
-    c.mbedtls_net_init(&socket);
-    res = c.mbedtls_net_connect(&socket, c_dest, c_port, c.MBEDTLS_NET_PROTO_TCP);
-    if (res != 0) {
-        std.log.err("socket error: {x}", .{res});
-        return GeminiError.Unknown;
-    }
-    defer c.mbedtls_net_free(&socket);
-
-    c.mbedtls_ssl_set_bio(&ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
-
+    // setup rng
     var entropy_ctx: c.mbedtls_entropy_context = undefined;
     c.mbedtls_entropy_init(&entropy_ctx);
     defer c.mbedtls_entropy_free(&entropy_ctx);
@@ -106,18 +85,57 @@ pub fn main() anyerror!void {
     c.mbedtls_ssl_conf_rng(ssl_config, c.mbedtls_ctr_drbg_random, &rng_ctx);
     defer c.mbedtls_ctr_drbg_free(&rng_ctx);
 
+    // setup ca chain
+    const c_crt_path: [:0]const u8 = "/etc/ssl/certs/";
+    var ca_chain: c.mbedtls_x509_crt = undefined;
+    c.mbedtls_x509_crt_init(&ca_chain);
+    defer c.mbedtls_x509_crt_free(&ca_chain);
+    res = c.mbedtls_x509_crt_parse_path(&ca_chain, c_crt_path);
+    if (res != 0) {
+        return GeminiError.Unknown;
+    }
+    // TODO do I need a revocation list?
+    const ca_crl: ?*c.mbedtls_x509_crl = null;
+    c.mbedtls_ssl_conf_ca_chain(ssl_config, &ca_chain, ca_crl);
+
+    // create ssl context
+    var ssl_ctx: c.mbedtls_ssl_context = undefined;
+    c.mbedtls_ssl_init(&ssl_ctx);
+    defer c.mbedtls_ssl_free(&ssl_ctx);
+
     res = c.mbedtls_ssl_setup(&ssl_ctx, ssl_config);
     if (res != 0) {
         return GeminiError.Unknown;
     }
 
+    // set hostname
+    const c_dest: [:0]const u8 = "gemini.circumlunar.space";
+    const c_port: [:0]const u8 = "1965";
+    res = c.mbedtls_ssl_set_hostname(&ssl_ctx, c_dest);
+    if (res != 0) {
+        return GeminiError.Unknown;
+    }
+
+    // create socket
+    var socket: c.mbedtls_net_context = undefined;
+    c.mbedtls_net_init(&socket);
+    res = c.mbedtls_net_connect(&socket, c_dest, c_port, c.MBEDTLS_NET_PROTO_TCP);
+    if (res != 0) {
+        std.log.err("socket error: {x}", .{res});
+        return GeminiError.Unknown;
+    }
+    defer c.mbedtls_net_free(&socket);
+
+    c.mbedtls_ssl_set_bio(&ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
+
+    c.mbedtls_ssl_set_hs_ca_chain(&ssl_ctx, &ca_chain, ca_crl);
+
+    // do handshake
     res = c.mbedtls_ssl_handshake(&ssl_ctx);
     if (res != 0) {
         std.log.err("handshake error: {x}", .{res});
         return GeminiError.Unknown;
     }
-
-    // TODO TLS handshake
 }
 
 test "create request" {
