@@ -14,7 +14,7 @@ pub fn build(b: *Builder) void {
     const exe = b.addExecutable("gemini-zig", "src/main.zig");
     exe.setTarget(target);
     exe.linkLibC();
-    exe.linkSystemLibrary("openssl");
+    exe.linkSystemLibrary("mbedtls");
     exe.setBuildMode(mode);
     exe.install();
 

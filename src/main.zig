@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const expect = std.testing.expect;
 const c = @cImport({
-    @cInclude("openssl/ssl.h");
+    @cInclude("mbedtls/ssl.h");
 });
 
 const defaultPort: u16 = 1965;
@@ -42,6 +42,8 @@ const Request = struct {
     }
 };
 
+const GeminiError = error{Unknown};
+
 pub fn main() anyerror!void {
     // TODO take input instead
     const dest = "gemini.circumlunar.space/";
@@ -51,9 +53,28 @@ pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena.allocator;
 
-    const ssl = c.SSL_CTX_new(c.TLS_client_method());
-    defer c.SSL_CTX_free(ssl);
+    var ssl_ctx: c.mbedtls_ssl_context = undefined;
+    c.mbedtls_ssl_init(&ssl_ctx);
+    defer c.mbedtls_ssl_free(&ssl_ctx);
 
+    // need to alloc on heap since zig treats as opaque
+    // size taken from C
+    const configSize: usize = 384;
+    var configBuf = try allocator.create([configSize]u8);
+    defer allocator.destroy(configBuf);
+
+    var ssl_config = @ptrCast(*c.mbedtls_ssl_config, configBuf);
+    c.mbedtls_ssl_config_init(ssl_config);
+    var res = c.mbedtls_ssl_config_defaults(ssl_config, c.MBEDTLS_SSL_IS_CLIENT, c.MBEDTLS_SSL_TRANSPORT_STREAM, c.MBEDTLS_SSL_PRESET_DEFAULT);
+    if (res < 0) {
+        return GeminiError.Unknown;
+    }
+    defer c.mbedtls_ssl_config_free(ssl_config);
+
+    res = c.mbedtls_ssl_setup(&ssl_ctx, ssl_config);
+    if (res < 0) {
+        return GeminiError.Unknown;
+    }
     //var socket = try std.net.tcpConnectToHost(allocator, dest, defaultPort);
     //defer socket.close();
 
