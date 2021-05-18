@@ -63,7 +63,16 @@ fn printCrtInfo(crt: *const c.mbedtls_x509_crt) void {
     }
 }
 
+fn appendCrt(ca_chain: *c.mbedtls_x509_crt, crt: *c.mbedtls_x509_crt) void {
+    var cur_crt = ca_chain;
+    while (cur_crt.next) |next| : (cur_crt = next) {}
+    // TODO will this leak or use after free?
+    cur_crt.next = crt;
+}
+
 fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*u32) callconv(.C) c_int {
+    const ca_chain = @ptrCast(*c.mbedtls_x509_crt, @alignCast(@alignOf(*c.mbedtls_x509_crt), ctx.?));
+
     // crt info
     printCrtInfo(crt.?);
 
@@ -74,8 +83,18 @@ fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*
     var infoBuf = [_:0]u8{0} ** 1024;
     const verify_prefix: [:0]const u8 = "verify info: ";
     const res = c.mbedtls_x509_crt_verify_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), verify_prefix, flags.?.*);
-    assert(res > 0);
-    std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
+    if (res > 0) {
+        std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
+    } else {
+        std.log.err("error while writing verify info", .{});
+    }
+
+    if (flags.?.* == c.MBEDTLS_X509_BADCERT_NOT_TRUSTED) {
+        // TODO we should really ask the user first
+        std.log.err("trusting self-signed", .{});
+        appendCrt(ca_chain, crt.?);
+    }
+
     // only return non-zero on fatal error
     return 0;
 }
@@ -128,12 +147,12 @@ pub fn main() anyerror!void {
     if (res != 0) {
         return GeminiError.Unknown;
     }
-    printCrtInfo(&ca_chain);
+    //printCrtInfo(&ca_chain);
     // TODO do I need a revocation list?
     const ca_crl: ?*c.mbedtls_x509_crl = null;
     c.mbedtls_ssl_conf_ca_chain(ssl_config, &ca_chain, ca_crl);
 
-    c.mbedtls_ssl_conf_verify(ssl_config, verify, null);
+    c.mbedtls_ssl_conf_verify(ssl_config, verify, &ca_chain);
 
     // create ssl context
     var ssl_ctx: c.mbedtls_ssl_context = undefined;
@@ -169,10 +188,18 @@ pub fn main() anyerror!void {
 
     // do handshake
     res = c.mbedtls_ssl_handshake(&ssl_ctx);
-    if (res != 0) {
-        std.log.err("handshake error: {x}", .{res});
-        return GeminiError.Unknown;
+    while (res != 0) {
+        const verify_result = c.mbedtls_ssl_get_verify_result(&ssl_ctx);
+        std.log.err("handshake error: {x}, verify result: {x}", .{ res, verify_result });
+        if (verify_result & c.MBEDTLS_X509_BADCERT_NOT_TRUSTED == 0) {
+            return GeminiError.Unknown;
+        }
+
+        assert(0 == c.mbedtls_ssl_session_reset(&ssl_ctx));
+        std.log.err("trying again...", .{});
     }
+
+    std.log.err("done!", .{});
 }
 
 test "create request" {
