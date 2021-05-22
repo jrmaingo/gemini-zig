@@ -64,10 +64,9 @@ fn printCrtInfo(crt: *const c.mbedtls_x509_crt) void {
 }
 
 fn appendCrt(ca_chain: *c.mbedtls_x509_crt, crt: *c.mbedtls_x509_crt) void {
-    var cur_crt = ca_chain;
-    while (cur_crt.next) |next| : (cur_crt = next) {}
-    // TODO will this leak or use after free?
-    cur_crt.next = crt;
+    const buf = crt.raw;
+    const res = c.mbedtls_x509_crt_parse_der(ca_chain, buf.p, buf.len);
+    assert(res == 0);
 }
 
 fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*u32) callconv(.C) c_int {
