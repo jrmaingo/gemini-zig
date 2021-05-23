@@ -6,6 +6,7 @@ const c = @cImport({
     @cInclude("mbedtls/net_sockets.h");
     @cInclude("mbedtls/entropy.h");
     @cInclude("mbedtls/ctr_drbg.h");
+    @cInclude("mbedtls/debug.h");
 });
 
 const defaultPort: u16 = 1965;
@@ -48,7 +49,16 @@ const Request = struct {
 const GeminiError = error{Unknown};
 
 fn debugLog(ctx: ?*c_void, level: c_int, file: ?[*:0]const u8, line: c_int, msg: ?[*:0]const u8) callconv(.C) void {
-    std.log.err("{} {}:{} {}", .{ level, file.?, line, msg });
+    const logLiteral = "{}:{} {}";
+    const logParams = .{ file.?, line, msg };
+    switch (level) {
+        1 => std.log.err(logLiteral, logParams),
+        2 => std.log.warn(logLiteral, logParams),
+        3 => std.log.notice(logLiteral, logParams),
+        4 => std.log.info(logLiteral, logParams),
+        5 => std.log.debug(logLiteral, logParams),
+        else => unreachable,
+    }
 }
 
 fn printCrtInfo(crt: *const c.mbedtls_x509_crt) void {
@@ -126,6 +136,7 @@ pub fn main() anyerror!void {
     }
     defer c.mbedtls_ssl_config_free(ssl_config);
 
+    c.mbedtls_debug_set_threshold(1);
     c.mbedtls_ssl_conf_dbg(ssl_config, debugLog, null);
 
     // setup rng
@@ -193,6 +204,7 @@ pub fn main() anyerror!void {
 
     // do handshake
     while (true) {
+        std.log.err("starting handshake...", .{});
         res = c.mbedtls_ssl_handshake(&ssl_ctx);
         if (res == 0) {
             break;
