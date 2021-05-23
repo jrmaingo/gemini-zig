@@ -64,8 +64,9 @@ fn printCrtInfo(crt: *const c.mbedtls_x509_crt) void {
 }
 
 fn appendCrt(ca_chain: *c.mbedtls_x509_crt, crt: *c.mbedtls_x509_crt) void {
+    // TODO assert self-signed
     const buf = crt.raw;
-    const res = c.mbedtls_x509_crt_parse_der(ca_chain, buf.p, buf.len);
+    const res = c.mbedtls_x509_crt_parse(ca_chain, buf.p, buf.len);
     assert(res == 0);
 }
 
@@ -80,18 +81,23 @@ fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*
 
     // verify info
     var infoBuf = [_:0]u8{0} ** 1024;
+    const flagsVal = flags.?.*;
     const verify_prefix: [:0]const u8 = "verify info: ";
-    const res = c.mbedtls_x509_crt_verify_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), verify_prefix, flags.?.*);
+    const res = c.mbedtls_x509_crt_verify_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), verify_prefix, flagsVal);
     if (res > 0) {
         std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
     } else {
         std.log.err("error while writing verify info", .{});
     }
 
-    if (flags.?.* == c.MBEDTLS_X509_BADCERT_NOT_TRUSTED) {
+    if (flagsVal == c.MBEDTLS_X509_BADCERT_NOT_TRUSTED) {
         // TODO we should really ask the user first
-        std.log.err("trusting self-signed", .{});
+        const subjectBuf = crt.?.subject.val;
+        const subject = subjectBuf.p[0..subjectBuf.len];
+        std.log.err("trusting self-signed crt for {}", .{subject});
         appendCrt(ca_chain, crt.?);
+    } else {
+        std.log.err("verify flags: {}", .{flagsVal});
     }
 
     // only return non-zero on fatal error
@@ -186,8 +192,11 @@ pub fn main() anyerror!void {
     c.mbedtls_ssl_set_hs_ca_chain(&ssl_ctx, &ca_chain, ca_crl);
 
     // do handshake
-    res = c.mbedtls_ssl_handshake(&ssl_ctx);
-    while (res != 0) {
+    while (true) {
+        res = c.mbedtls_ssl_handshake(&ssl_ctx);
+        if (res == 0) {
+            break;
+        }
         const verify_result = c.mbedtls_ssl_get_verify_result(&ssl_ctx);
         std.log.err("handshake error: {x}, verify result: {x}", .{ res, verify_result });
         if (verify_result & c.MBEDTLS_X509_BADCERT_NOT_TRUSTED == 0) {
@@ -195,7 +204,7 @@ pub fn main() anyerror!void {
         }
 
         assert(0 == c.mbedtls_ssl_session_reset(&ssl_ctx));
-        std.log.err("trying again...", .{});
+        std.log.err("trying handshake again...", .{});
     }
 
     std.log.err("done!", .{});
