@@ -73,14 +73,44 @@ fn printCrtInfo(crt: *const c.mbedtls_x509_crt) void {
     }
 }
 
+fn chainLen(ca_chain: ?*const c.mbedtls_x509_crt) i32 {
+    if (ca_chain == null) {
+        return 0;
+    }
+    return 1 + chainLen(ca_chain.?.*.next);
+}
+
+fn chainContains(ca_chain: *const c.mbedtls_x509_crt, crt: *const c.mbedtls_x509_crt) bool {
+    var next: ?*const c.mbedtls_x509_crt = ca_chain;
+    while (next) |cur| : (next = cur.*.next) {
+        if (cur.sig.len == crt.sig.len and std.mem.eql(u8, cur.sig.p[0..cur.sig.len], crt.sig.p[0..crt.sig.len])) {
+            assert(crt.raw.len != 0);
+            assert(cur.raw.len == crt.raw.len);
+            assert(std.mem.eql(u8, cur.raw.p[0..crt.raw.len], crt.raw.p[0..crt.raw.len]));
+            return true;
+        }
+    }
+    return false;
+}
+
 fn appendCrt(ca_chain: *c.mbedtls_x509_crt, crt: *c.mbedtls_x509_crt) void {
-    // TODO assert self-signed
+    // only append self-signed certs
+    assert(std.mem.eql(u8, crt.*.issuer_raw.p[0..crt.*.issuer_raw.len], crt.*.subject_raw.p[0..crt.*.subject_raw.len]));
+    const oldLen = chainLen(ca_chain);
     const buf = crt.raw;
-    const res = c.mbedtls_x509_crt_parse(ca_chain, buf.p, buf.len);
+    var res = c.mbedtls_x509_crt_parse(ca_chain, buf.p, buf.len);
     assert(res == 0);
+    assert(chainLen(ca_chain) == oldLen + 1);
+
+    // sanity check
+    var flags: u32 = undefined;
+    res = c.mbedtls_x509_crt_verify(crt, ca_chain, null, null, &flags, null, null);
+    assert(res == 0);
+    assert(flags == 0);
 }
 
 fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*u32) callconv(.C) c_int {
+    // this is the same chain that is used for handshake
     const ca_chain = @ptrCast(*c.mbedtls_x509_crt, @alignCast(@alignOf(*c.mbedtls_x509_crt), ctx.?));
 
     // crt info
@@ -188,25 +218,29 @@ pub fn main() anyerror!void {
         return GeminiError.Unknown;
     }
 
-    // create socket
-    var socket: c.mbedtls_net_context = undefined;
-    c.mbedtls_net_init(&socket);
-    res = c.mbedtls_net_connect(&socket, c_dest, c_port, c.MBEDTLS_NET_PROTO_TCP);
-    if (res != 0) {
-        std.log.err("socket error: {x}", .{res});
-        return GeminiError.Unknown;
-    }
-    defer c.mbedtls_net_free(&socket);
-
-    c.mbedtls_ssl_set_bio(&ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
-
-    c.mbedtls_ssl_set_hs_ca_chain(&ssl_ctx, &ca_chain, ca_crl);
-
     // do handshake
+    var attempts: i32 = 0;
     while (true) {
+        if (attempts > 1) {
+            break;
+        }
+
+        // create socket
+        var socket: c.mbedtls_net_context = undefined;
+        c.mbedtls_net_init(&socket);
+        res = c.mbedtls_net_connect(&socket, c_dest, c_port, c.MBEDTLS_NET_PROTO_TCP);
+        if (res != 0) {
+            std.log.err("socket error: {x}", .{res});
+            return GeminiError.Unknown;
+        }
+        defer c.mbedtls_net_free(&socket);
+
+        c.mbedtls_ssl_set_bio(&ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
+
         std.log.err("starting handshake...", .{});
         res = c.mbedtls_ssl_handshake(&ssl_ctx);
         if (res == 0) {
+            std.log.err("handshake success!", .{});
             break;
         }
         const verify_result = c.mbedtls_ssl_get_verify_result(&ssl_ctx);
@@ -217,6 +251,8 @@ pub fn main() anyerror!void {
 
         assert(0 == c.mbedtls_ssl_session_reset(&ssl_ctx));
         std.log.err("trying handshake again...", .{});
+
+        attempts += 1;
     }
 
     std.log.err("done!", .{});
