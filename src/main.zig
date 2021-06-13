@@ -28,7 +28,7 @@ const Request = struct {
         var requestBuf: [requestBufLen]u8 = undefined;
 
         // TODO handle error
-        _ = std.fmt.bufPrint(requestBuf[0..], "{}{}{}", .{ urlPrefix, url, requestSuffix }) catch unreachable;
+        _ = std.fmt.bufPrint(requestBuf[0..], "{s}{s}{s}", .{ urlPrefix, url, requestSuffix }) catch unreachable;
 
         return Self{
             .requestBuf = requestBuf,
@@ -49,7 +49,7 @@ const Request = struct {
 const GeminiError = error{Unknown};
 
 fn debugLog(ctx: ?*c_void, level: c_int, file: ?[*:0]const u8, line: c_int, msg: ?[*:0]const u8) callconv(.C) void {
-    const logLiteral = "{}:{} {}";
+    const logLiteral = "{s}:{} {s}";
     const logParams = .{ file.?, line, msg };
     switch (level) {
         1 => std.log.err(logLiteral, logParams),
@@ -66,7 +66,7 @@ fn printCrtInfo(crt: *const c.mbedtls_x509_crt) void {
     const crt_prefix: [:0]const u8 = "crt info: ";
     var res = c.mbedtls_x509_crt_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), crt_prefix, crt);
     assert(res > 0);
-    std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
+    std.log.err("{s}", .{infoBuf[0..@intCast(usize, res)]});
 
     if (crt.*.next) |next| {
         printCrtInfo(next);
@@ -125,7 +125,7 @@ fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*
     const verify_prefix: [:0]const u8 = "verify info: ";
     const res = c.mbedtls_x509_crt_verify_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), verify_prefix, flagsVal);
     if (res > 0) {
-        std.log.err("{}", .{infoBuf[0..@intCast(usize, res)]});
+        std.log.err("{s}", .{infoBuf[0..@intCast(usize, res)]});
     } else {
         std.log.err("error while writing verify info", .{});
     }
@@ -134,7 +134,7 @@ fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*
         // TODO we should really ask the user first
         const subjectBuf = crt.?.subject.val;
         const subject = subjectBuf.p[0..subjectBuf.len];
-        std.log.err("trusting self-signed crt for {}", .{subject});
+        std.log.err("trusting self-signed crt for {s}", .{subject});
         appendCrt(ca_chain, crt.?);
     } else {
         std.log.err("verify flags: {}", .{flagsVal});
@@ -148,7 +148,7 @@ pub fn main() anyerror!void {
     // TODO take input instead
     const dest = "gemini.circumlunar.space/";
     const request = Request.init(dest);
-    std.log.info("loading {}", .{request.getUrl()});
+    std.log.info("loading {s}", .{request.getUrl()});
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena.allocator;
