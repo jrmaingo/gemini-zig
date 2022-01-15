@@ -143,6 +143,33 @@ fn verify(ctx: ?*anyopaque, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags:
     return 0;
 }
 
+const TLSContext = struct {
+    ssl_ctx: c.mbedtls_ssl_context,
+    net_ctx: ?c.mbedtls_net_context,
+
+    const Self = @This();
+
+    fn init(ssl_config: *const c.mbedtls_ssl_config) anyerror!Self {
+        var result = Self{
+            .ssl_ctx = undefined,
+            .net_ctx = null,
+        };
+        c.mbedtls_ssl_init(&result.ssl_ctx);
+
+        const res = c.mbedtls_ssl_setup(&result.ssl_ctx, ssl_config);
+        if (res != 0) {
+            return GeminiError.Unknown;
+        }
+
+        return result;
+    }
+
+    fn destroy(self: *Self) void {
+        // TODO destroy conn if present
+        c.mbedtls_ssl_free(&self.ssl_ctx);
+    }
+};
+
 pub fn main() anyerror!void {
     // TODO take input instead
     const dest = "gemini.circumlunar.space/";
@@ -198,19 +225,13 @@ pub fn main() anyerror!void {
     c.mbedtls_ssl_conf_verify(&ssl_config, verify, &ca_chain);
 
     // create ssl context
-    var ssl_ctx: c.mbedtls_ssl_context = undefined;
-    c.mbedtls_ssl_init(&ssl_ctx);
-    defer c.mbedtls_ssl_free(&ssl_ctx);
-
-    res = c.mbedtls_ssl_setup(&ssl_ctx, &ssl_config);
-    if (res != 0) {
-        return GeminiError.Unknown;
-    }
+    var tls_ctx = try TLSContext.init(&ssl_config);
+    defer tls_ctx.destroy();
 
     // set hostname
     const c_dest: [:0]const u8 = "gemini.circumlunar.space";
     const c_port: [:0]const u8 = "1965";
-    res = c.mbedtls_ssl_set_hostname(&ssl_ctx, c_dest);
+    res = c.mbedtls_ssl_set_hostname(&tls_ctx.ssl_ctx, c_dest);
     if (res != 0) {
         return GeminiError.Unknown;
     }
@@ -232,25 +253,27 @@ pub fn main() anyerror!void {
         }
         defer c.mbedtls_net_free(&socket);
 
-        c.mbedtls_ssl_set_bio(&ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
+        c.mbedtls_ssl_set_bio(&tls_ctx.ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
 
         std.log.err("starting handshake...", .{});
-        res = c.mbedtls_ssl_handshake(&ssl_ctx);
+        res = c.mbedtls_ssl_handshake(&tls_ctx.ssl_ctx);
         if (res == 0) {
             std.log.err("handshake success!", .{});
             break;
         }
-        const verify_result = c.mbedtls_ssl_get_verify_result(&ssl_ctx);
+        const verify_result = c.mbedtls_ssl_get_verify_result(&tls_ctx.ssl_ctx);
         std.log.err("handshake error: {x}, verify result: {x}", .{ res, verify_result });
         if (verify_result & c.MBEDTLS_X509_BADCERT_NOT_TRUSTED == 0) {
             return GeminiError.Unknown;
         }
 
-        assert(0 == c.mbedtls_ssl_session_reset(&ssl_ctx));
+        assert(0 == c.mbedtls_ssl_session_reset(&tls_ctx.ssl_ctx));
         std.log.err("trying handshake again...", .{});
 
         attempts += 1;
     }
+
+    // TODO something with the completed handshake?
 
     std.log.err("done!", .{});
 }
