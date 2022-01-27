@@ -155,21 +155,16 @@ pub fn main() anyerror!void {
     // intentionally unused right now
     _ = allocator;
 
-    // need to use a buffer since zig treats as opaque type
-    // size taken from C
-    const configSize: usize = 384;
-    var configBuf: [configSize]u8 align(8) = undefined;
-
-    var ssl_config = @ptrCast(*c.mbedtls_ssl_config, &configBuf);
-    c.mbedtls_ssl_config_init(ssl_config);
-    var res = c.mbedtls_ssl_config_defaults(ssl_config, c.MBEDTLS_SSL_IS_CLIENT, c.MBEDTLS_SSL_TRANSPORT_STREAM, c.MBEDTLS_SSL_PRESET_DEFAULT);
+    var ssl_config: c.mbedtls_ssl_config = undefined;
+    c.mbedtls_ssl_config_init(&ssl_config);
+    var res = c.mbedtls_ssl_config_defaults(&ssl_config, c.MBEDTLS_SSL_IS_CLIENT, c.MBEDTLS_SSL_TRANSPORT_STREAM, c.MBEDTLS_SSL_PRESET_DEFAULT);
     if (res != 0) {
         return GeminiError.Unknown;
     }
-    defer c.mbedtls_ssl_config_free(ssl_config);
+    defer c.mbedtls_ssl_config_free(&ssl_config);
 
     c.mbedtls_debug_set_threshold(1);
-    c.mbedtls_ssl_conf_dbg(ssl_config, debugLog, null);
+    c.mbedtls_ssl_conf_dbg(&ssl_config, debugLog, null);
 
     // setup rng
     var entropy_ctx: c.mbedtls_entropy_context = undefined;
@@ -183,7 +178,7 @@ pub fn main() anyerror!void {
         std.log.err("rng seed error: {x}", .{res});
         return GeminiError.Unknown;
     }
-    c.mbedtls_ssl_conf_rng(ssl_config, c.mbedtls_ctr_drbg_random, &rng_ctx);
+    c.mbedtls_ssl_conf_rng(&ssl_config, c.mbedtls_ctr_drbg_random, &rng_ctx);
     defer c.mbedtls_ctr_drbg_free(&rng_ctx);
 
     // setup ca chain
@@ -198,16 +193,16 @@ pub fn main() anyerror!void {
     //printCrtInfo(&ca_chain);
     // TODO do I need a revocation list?
     const ca_crl: ?*c.mbedtls_x509_crl = null;
-    c.mbedtls_ssl_conf_ca_chain(ssl_config, &ca_chain, ca_crl);
+    c.mbedtls_ssl_conf_ca_chain(&ssl_config, &ca_chain, ca_crl);
 
-    c.mbedtls_ssl_conf_verify(ssl_config, verify, &ca_chain);
+    c.mbedtls_ssl_conf_verify(&ssl_config, verify, &ca_chain);
 
     // create ssl context
     var ssl_ctx: c.mbedtls_ssl_context = undefined;
     c.mbedtls_ssl_init(&ssl_ctx);
     defer c.mbedtls_ssl_free(&ssl_ctx);
 
-    res = c.mbedtls_ssl_setup(&ssl_ctx, ssl_config);
+    res = c.mbedtls_ssl_setup(&ssl_ctx, &ssl_config);
     if (res != 0) {
         return GeminiError.Unknown;
     }
