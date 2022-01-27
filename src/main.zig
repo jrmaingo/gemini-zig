@@ -48,16 +48,15 @@ const Request = struct {
 
 const GeminiError = error{Unknown};
 
-fn debugLog(ctx: ?*c_void, level: c_int, file: ?[*:0]const u8, line: c_int, msg: ?[*:0]const u8) callconv(.C) void {
+fn debugLog(ctx: ?*anyopaque, level: c_int, file: ?[*:0]const u8, line: c_int, msg: ?[*:0]const u8) callconv(.C) void {
+    _ = ctx;
     const logLiteral = "{s}:{} {s}";
     const logParams = .{ file.?, line, msg };
     switch (level) {
         1 => std.log.err(logLiteral, logParams),
         2 => std.log.warn(logLiteral, logParams),
-        3 => std.log.notice(logLiteral, logParams),
-        4 => std.log.info(logLiteral, logParams),
-        5 => std.log.debug(logLiteral, logParams),
-        else => unreachable,
+        3 => std.log.info(logLiteral, logParams),
+        else => std.log.debug(logLiteral, logParams),
     }
 }
 
@@ -109,7 +108,7 @@ fn appendCrt(ca_chain: *c.mbedtls_x509_crt, crt: *c.mbedtls_x509_crt) void {
     assert(flags == 0);
 }
 
-fn verify(ctx: ?*c_void, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*u32) callconv(.C) c_int {
+fn verify(ctx: ?*anyopaque, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags: ?*u32) callconv(.C) c_int {
     // this is the same chain that is used for handshake
     const ca_chain = @ptrCast(*c.mbedtls_x509_crt, @alignCast(@alignOf(*c.mbedtls_x509_crt), ctx.?));
 
@@ -153,10 +152,13 @@ pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena.allocator;
 
+    // intentionally unused right now
+    _ = allocator;
+
     // need to use a buffer since zig treats as opaque type
     // size taken from C
     const configSize: usize = 384;
-    var configBuf: [configSize]u8 = undefined;
+    var configBuf: [configSize]u8 align(8) = undefined;
 
     var ssl_config = @ptrCast(*c.mbedtls_ssl_config, &configBuf);
     c.mbedtls_ssl_config_init(ssl_config);
