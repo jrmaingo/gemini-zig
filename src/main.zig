@@ -299,5 +299,5 @@ pub fn main() anyerror!void {
 test "create request" {
     const dest = "gemini://gemini.circumlunar.space/";
     const request = Request.init(dest);
-    expect(std.mem.eql(u8, dest, request.getUrl()));
+    try expect(std.mem.eql(u8, dest, request.getUrl()));
 }
