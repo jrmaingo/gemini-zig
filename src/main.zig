@@ -167,16 +167,26 @@ const TLSContext = struct {
     fn connect(self: *Self, c_dest: [:0]const u8, c_port: [:0]const u8) anyerror!void {
         assert(self.*.net_ctx == null);
 
-        var socket: c.mbedtls_net_context = undefined;
-        c.mbedtls_net_init(&socket);
-        const res = c.mbedtls_net_connect(&socket, c_dest, c_port, c.MBEDTLS_NET_PROTO_TCP);
+        // workaround, no easy way to pass in a pointer to an optional struct field
+        var net_ctx: c.mbedtls_net_context = undefined;
+        c.mbedtls_net_init(&net_ctx);
+
+        self.*.net_ctx = net_ctx;
+        var socket = &self.*.net_ctx.?;
+        const res = c.mbedtls_net_connect(socket, c_dest, c_port, c.MBEDTLS_NET_PROTO_TCP);
         if (res != 0) {
             std.log.err("socket error: {x}", .{res});
+            self.*.net_ctx = null;
             return GeminiError.Unknown;
         }
 
-        self.*.net_ctx = socket;
-        c.mbedtls_ssl_set_bio(&self.ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
+        c.mbedtls_ssl_set_bio(&self.ssl_ctx, socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
+    }
+
+    fn disconnect(self: *Self) void {
+        assert(self.*.net_ctx != null);
+        c.mbedtls_net_free(&self.*.net_ctx.?);
+        self.*.net_ctx = null;
     }
 
     fn destroy(self: *Self) void {
@@ -277,6 +287,7 @@ pub fn main() anyerror!void {
         assert(0 == c.mbedtls_ssl_session_reset(&tls_ctx.ssl_ctx));
         std.log.err("trying handshake again...", .{});
 
+        tls_ctx.disconnect();
         attempts += 1;
     }
 
