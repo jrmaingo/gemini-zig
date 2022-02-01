@@ -164,9 +164,26 @@ const TLSContext = struct {
         return result;
     }
 
+    fn connect(self: *Self, c_dest: [:0]const u8, c_port: [:0]const u8) anyerror!void {
+        assert(self.*.net_ctx == null);
+
+        var socket: c.mbedtls_net_context = undefined;
+        c.mbedtls_net_init(&socket);
+        const res = c.mbedtls_net_connect(&socket, c_dest, c_port, c.MBEDTLS_NET_PROTO_TCP);
+        if (res != 0) {
+            std.log.err("socket error: {x}", .{res});
+            return GeminiError.Unknown;
+        }
+
+        self.*.net_ctx = socket;
+        c.mbedtls_ssl_set_bio(&self.ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
+    }
+
     fn destroy(self: *Self) void {
-        // TODO destroy conn if present
-        c.mbedtls_ssl_free(&self.ssl_ctx);
+        c.mbedtls_ssl_free(&self.*.ssl_ctx);
+        if (self.*.net_ctx != null) {
+            c.mbedtls_net_free(&self.*.net_ctx.?);
+        }
     }
 };
 
@@ -243,17 +260,7 @@ pub fn main() anyerror!void {
             break;
         }
 
-        // create socket
-        var socket: c.mbedtls_net_context = undefined;
-        c.mbedtls_net_init(&socket);
-        res = c.mbedtls_net_connect(&socket, c_dest, c_port, c.MBEDTLS_NET_PROTO_TCP);
-        if (res != 0) {
-            std.log.err("socket error: {x}", .{res});
-            return GeminiError.Unknown;
-        }
-        defer c.mbedtls_net_free(&socket);
-
-        c.mbedtls_ssl_set_bio(&tls_ctx.ssl_ctx, &socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
+        try tls_ctx.connect(c_dest, c_port);
 
         std.log.err("starting handshake...", .{});
         res = c.mbedtls_ssl_handshake(&tls_ctx.ssl_ctx);
