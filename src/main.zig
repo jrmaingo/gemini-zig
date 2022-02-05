@@ -291,6 +291,16 @@ pub fn main() anyerror!void {
         attempts += 1;
     }
 
+    // send request
+    const request_data = request.getBytes();
+    res = c.mbedtls_ssl_write(&tls_ctx.ssl_ctx, request_data.ptr, request_data.len);
+    if (res != request_data.len) {
+        std.log.err("request error, only wrote {} bytes\n", .{res});
+        return GeminiError.Unknown;
+    } else {
+        std.log.info("sent request", .{});
+    }
+
     // TODO something with the completed handshake?
 
     std.log.err("done!", .{});
