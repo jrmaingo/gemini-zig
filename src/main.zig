@@ -305,9 +305,41 @@ pub fn main() anyerror!void {
     var response_data = std.mem.zeroes([1024]u8);
     res = c.mbedtls_ssl_read(&tls_ctx.ssl_ctx, &response_data, response_data.len);
     if (res > 0) {
-        std.log.info("response received {}\n", .{res});
+        std.log.info("response header received {}\n", .{res});
     } else {
-        std.log.err("response error {}\n", .{res});
+        std.log.err("response header read error {}\n", .{res});
+    }
+
+    // parse response header
+    const status_str = response_data[0..2];
+    const status = try std.fmt.parseUnsigned(u8, status_str, 10);
+
+    assert(res < 1024);
+    const sentinel_index = std.mem.indexOf(u8, response_data[0..@intCast(usize, res)], Request.requestSuffix);
+    if (sentinel_index == null) {
+        std.log.err("response missing sentinel\n", .{});
+        return GeminiError.Unknown;
+    }
+    const meta_str = response_data[3..sentinel_index.?];
+    std.log.info("response code {d}, meta: {s}\n", .{ status, meta_str });
+
+    // read reponse body
+    var response_size: usize = 0;
+    while (res > 0) {
+        res = c.mbedtls_ssl_read(&tls_ctx.ssl_ctx, &response_data, response_data.len);
+        std.log.info("response body read {}\n", .{res});
+        response_size += @intCast(usize, res);
+        if (res < response_data.len) {
+            // we have hit the end
+            break;
+        }
+    }
+
+    if (res >= 0) {
+        std.log.info("response body received {}\n", .{response_size});
+    } else {
+        std.log.err("response body read error {}\n", .{res});
+        return GeminiError.Unknown;
     }
 
     std.log.err("done!", .{});
