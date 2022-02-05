@@ -301,7 +301,14 @@ pub fn main() anyerror!void {
         std.log.info("sent request", .{});
     }
 
-    // TODO something with the completed handshake?
+    // read response
+    var response_data = std.mem.zeroes([1024]u8);
+    res = c.mbedtls_ssl_read(&tls_ctx.ssl_ctx, &response_data, response_data.len);
+    if (res > 0) {
+        std.log.info("response received {}\n", .{res});
+    } else {
+        std.log.err("response error {}\n", .{res});
+    }
 
     std.log.err("done!", .{});
 }
