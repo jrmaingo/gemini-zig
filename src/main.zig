@@ -64,6 +64,30 @@ const Request = struct {
     }
 };
 
+const Response = struct {
+    data: [buffer_size]u8,
+    bytes_read: usize,
+
+    const Self = @This();
+    const buffer_size = 1024;
+
+    fn read(tls_ctx: *TLSContext) anyerror!Self {
+        var data = std.mem.zeroes([1024]u8);
+        const res = c.mbedtls_ssl_read(&tls_ctx.*.ssl_ctx, &data, data.len);
+        if (res > 0) {
+            std.log.info("response header received {}\n", .{res});
+        } else {
+            std.log.err("response header read error {}\n", .{res});
+            return GeminiError.Unknown;
+        }
+
+        return Self{
+            .bytes_read = @intCast(usize, res),
+            .data = data,
+        };
+    }
+};
+
 const GeminiError = error{Unknown};
 
 fn debugLog(ctx: ?*anyopaque, level: c_int, file: ?[*:0]const u8, line: c_int, msg: ?[*:0]const u8) callconv(.C) void {
@@ -312,28 +336,23 @@ pub fn main() anyerror!void {
     try request.send();
 
     // read response
-    var response_data = std.mem.zeroes([1024]u8);
-    res = c.mbedtls_ssl_read(&tls_ctx.ssl_ctx, &response_data, response_data.len);
-    if (res > 0) {
-        std.log.info("response header received {}\n", .{res});
-    } else {
-        std.log.err("response header read error {}\n", .{res});
-    }
+    const response = try Response.read(&tls_ctx);
 
     // parse response header
-    const status_str = response_data[0..2];
+    const status_str = response.data[0..2];
     const status = try std.fmt.parseUnsigned(u8, status_str, 10);
 
     assert(res < 1024);
-    const sentinel_index = std.mem.indexOf(u8, response_data[0..@intCast(usize, res)], Request.requestSuffix);
+    const sentinel_index = std.mem.indexOf(u8, response.data[0..response.bytes_read], Request.requestSuffix);
     if (sentinel_index == null) {
         std.log.err("response missing sentinel\n", .{});
         return GeminiError.Unknown;
     }
-    const meta_str = response_data[3..sentinel_index.?];
+    const meta_str = response.data[3..sentinel_index.?];
     std.log.info("response code {d}, meta: {s}\n", .{ status, meta_str });
 
     // read reponse body
+    var response_data = std.mem.zeroes([1024]u8);
     var response_size: usize = 0;
     while (res > 0) {
         res = c.mbedtls_ssl_read(&tls_ctx.ssl_ctx, &response_data, response_data.len);
