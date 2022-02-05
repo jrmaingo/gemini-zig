@@ -12,6 +12,7 @@ const c = @cImport({
 const defaultPort: u16 = 1965;
 
 const Request = struct {
+    tls_ctx: *TLSContext,
     requestBuf: [requestBufLen]u8,
     requestLen: usize,
 
@@ -21,7 +22,8 @@ const Request = struct {
     const requestSuffix = "\u{0D}\u{0A}";
     const requestBufLen = maxUrlLen + requestSuffix.len;
 
-    fn init(url: []const u8) Self {
+    // create the request, handshake must be complete before calling send
+    fn init(tls_ctx: *TLSContext, url: []const u8) Self {
         assert(url.len > 0 and urlPrefix.len + url.len <= maxUrlLen);
 
         const requestLen = urlPrefix.len + url.len + requestSuffix.len;
@@ -31,16 +33,32 @@ const Request = struct {
         _ = std.fmt.bufPrint(requestBuf[0..], "{s}{s}{s}", .{ urlPrefix, url, requestSuffix }) catch unreachable;
 
         return Self{
+            .tls_ctx = tls_ctx,
             .requestBuf = requestBuf,
             .requestLen = requestLen,
         };
     }
 
+    // send the request
+    fn send(self: *const Self) anyerror!void {
+        std.log.info("sending request to {s}\n", .{self.*.getUrl()});
+        const request_data = self.*.getBytes();
+        const res = c.mbedtls_ssl_write(&self.*.tls_ctx.*.ssl_ctx, request_data.ptr, request_data.len);
+        if (res != request_data.len) {
+            std.log.err("request error, only wrote {} bytes\n", .{res});
+            return GeminiError.Unknown;
+        } else {
+            std.log.info("sent request", .{});
+        }
+    }
+
+    // complete URL for this request
     fn getUrl(self: *const Self) []const u8 {
         const urlLen = self.requestLen - requestSuffix.len;
         return self.requestBuf[0..urlLen];
     }
 
+    // request payload
     fn getBytes(self: *const Self) []const u8 {
         return self.requestBuf[0..self.requestLen];
     }
@@ -200,8 +218,6 @@ const TLSContext = struct {
 pub fn main() anyerror!void {
     // TODO take input instead
     const dest = "gemini.circumlunar.space/";
-    const request = Request.init(dest);
-    std.log.info("loading {s}", .{request.getUrl()});
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena.allocator;
@@ -292,14 +308,8 @@ pub fn main() anyerror!void {
     }
 
     // send request
-    const request_data = request.getBytes();
-    res = c.mbedtls_ssl_write(&tls_ctx.ssl_ctx, request_data.ptr, request_data.len);
-    if (res != request_data.len) {
-        std.log.err("request error, only wrote {} bytes\n", .{res});
-        return GeminiError.Unknown;
-    } else {
-        std.log.info("sent request", .{});
-    }
+    const request = Request.init(&tls_ctx, dest);
+    try request.send();
 
     // read response
     var response_data = std.mem.zeroes([1024]u8);
