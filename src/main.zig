@@ -12,7 +12,6 @@ const c = @cImport({
 const defaultPort: u16 = 1965;
 
 const Request = struct {
-    tls_ctx: *TLSContext,
     requestBuf: [requestBufLen]u8,
     requestLen: usize,
 
@@ -23,7 +22,7 @@ const Request = struct {
     const requestBufLen = maxUrlLen + requestSuffix.len;
 
     // create the request, handshake must be complete before calling send
-    fn init(tls_ctx: *TLSContext, url: []const u8) Self {
+    fn init(url: []const u8) Self {
         assert(url.len > 0 and urlPrefix.len + url.len <= maxUrlLen);
 
         const requestLen = urlPrefix.len + url.len + requestSuffix.len;
@@ -33,23 +32,9 @@ const Request = struct {
         _ = std.fmt.bufPrint(requestBuf[0..], "{s}{s}{s}", .{ urlPrefix, url, requestSuffix }) catch unreachable;
 
         return Self{
-            .tls_ctx = tls_ctx,
             .requestBuf = requestBuf,
             .requestLen = requestLen,
         };
-    }
-
-    // send the request
-    fn send(self: *const Self) anyerror!void {
-        std.log.info("sending request to {s}\n", .{self.*.getUrl()});
-        const request_data = self.*.getBytes();
-        const res = c.mbedtls_ssl_write(&self.*.tls_ctx.*.ssl_ctx, request_data.ptr, request_data.len);
-        if (res != request_data.len) {
-            std.log.err("request error, only wrote {} bytes\n", .{res});
-            return GeminiError.Unknown;
-        } else {
-            std.log.info("sent request", .{});
-        }
     }
 
     // complete URL for this request
@@ -70,22 +55,6 @@ const Response = struct {
 
     const Self = @This();
     const buffer_size = 1024;
-
-    fn read(tls_ctx: *TLSContext) anyerror!Self {
-        var data = std.mem.zeroes([1024]u8);
-        const res = c.mbedtls_ssl_read(&tls_ctx.*.ssl_ctx, &data, data.len);
-        if (res > 0) {
-            std.log.info("response header received {}\n", .{res});
-        } else {
-            std.log.err("response header read error {}\n", .{res});
-            return GeminiError.Unknown;
-        }
-
-        return Self{
-            .bytes_read = @intCast(usize, res),
-            .data = data,
-        };
-    }
 };
 
 const GeminiError = error{Unknown};
@@ -107,7 +76,7 @@ fn printCrtInfo(crt: *const c.mbedtls_x509_crt) void {
     const crt_prefix: [:0]const u8 = "crt info: ";
     var res = c.mbedtls_x509_crt_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), crt_prefix, crt);
     assert(res > 0);
-    std.log.err("{s}", .{infoBuf[0..@intCast(usize, res)]});
+    std.log.info("{s}", .{infoBuf[0..@intCast(usize, res)]});
 
     if (crt.*.next) |next| {
         printCrtInfo(next);
@@ -158,24 +127,28 @@ fn verify(ctx: ?*anyopaque, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags:
     printCrtInfo(crt.?);
 
     // cert depth
-    std.log.err("depth: {}", .{cert_depth});
+    std.log.info("depth: {}", .{cert_depth});
 
     // verify info
     var infoBuf = [_:0]u8{0} ** 1024;
     const flagsVal = flags.?.*;
     const verify_prefix: [:0]const u8 = "verify info: ";
     const res = c.mbedtls_x509_crt_verify_info(&infoBuf, @sizeOf(@TypeOf(infoBuf)), verify_prefix, flagsVal);
-    if (res > 0) {
-        std.log.err("{s}", .{infoBuf[0..@intCast(usize, res)]});
+    if (res == 0) {
+        std.log.info("no verify info string", .{});
+    } else if (res > 0) {
+        std.log.info("{s}", .{infoBuf[0..@intCast(usize, res)]});
     } else {
         std.log.err("error while writing verify info", .{});
     }
 
-    if (flagsVal == c.MBEDTLS_X509_BADCERT_NOT_TRUSTED) {
+    if (flagsVal == 0) {
+        std.log.info("verification succeeded", .{});
+    } else if (flagsVal == c.MBEDTLS_X509_BADCERT_NOT_TRUSTED) {
         // TODO we should really ask the user first
         const subjectBuf = crt.?.subject.val;
         const subject = subjectBuf.p[0..subjectBuf.len];
-        std.log.err("trusting self-signed crt for {s}", .{subject});
+        std.log.warn("trusting self-signed crt for {s}", .{subject});
         appendCrt(ca_chain, crt.?);
     } else {
         std.log.err("verify flags: {}", .{flagsVal});
@@ -229,6 +202,35 @@ const TLSContext = struct {
         assert(self.*.net_ctx != null);
         c.mbedtls_net_free(&self.*.net_ctx.?);
         self.*.net_ctx = null;
+    }
+
+    fn read(self: *Self) anyerror!Response {
+        var data = std.mem.zeroes([1024]u8);
+        const res = c.mbedtls_ssl_read(&self.*.ssl_ctx, &data, data.len);
+        if (res > 0) {
+            std.log.info("response header received {}\n", .{res});
+        } else {
+            std.log.err("response header read error {}\n", .{res});
+            return GeminiError.Unknown;
+        }
+
+        return Response{
+            .bytes_read = @intCast(usize, res),
+            .data = data,
+        };
+    }
+
+    // send the request
+    fn send(self: *Self, request: *const Request) anyerror!void {
+        std.log.info("sending request to {s}\n", .{request.*.getUrl()});
+        const request_data = request.*.getBytes();
+        const res = c.mbedtls_ssl_write(&self.*.ssl_ctx, request_data.ptr, request_data.len);
+        if (res != request_data.len) {
+            std.log.err("request error, only wrote {} bytes\n", .{res});
+            return GeminiError.Unknown;
+        } else {
+            std.log.info("sent request", .{});
+        }
     }
 
     fn destroy(self: *Self) void {
@@ -312,10 +314,10 @@ pub fn main() anyerror!void {
 
         try tls_ctx.connect(c_dest, c_port);
 
-        std.log.err("starting handshake...", .{});
+        std.log.info("starting handshake...", .{});
         res = c.mbedtls_ssl_handshake(&tls_ctx.ssl_ctx);
         if (res == 0) {
-            std.log.err("handshake success!", .{});
+            std.log.info("handshake success!", .{});
             break;
         }
         const verify_result = c.mbedtls_ssl_get_verify_result(&tls_ctx.ssl_ctx);
@@ -325,18 +327,18 @@ pub fn main() anyerror!void {
         }
 
         assert(0 == c.mbedtls_ssl_session_reset(&tls_ctx.ssl_ctx));
-        std.log.err("trying handshake again...", .{});
+        std.log.info("trying handshake again...", .{});
 
         tls_ctx.disconnect();
         attempts += 1;
     }
 
     // send request
-    const request = Request.init(&tls_ctx, dest);
-    try request.send();
+    const request = Request.init(dest);
+    try tls_ctx.send(&request);
 
     // read response
-    const response = try Response.read(&tls_ctx);
+    const response = try tls_ctx.read();
 
     // parse response header
     const status_str = response.data[0..2];
@@ -371,7 +373,7 @@ pub fn main() anyerror!void {
         return GeminiError.Unknown;
     }
 
-    std.log.err("done!", .{});
+    std.log.info("done!", .{});
 }
 
 test "create request" {
