@@ -201,6 +201,19 @@ const TLSContext = struct {
         c.mbedtls_ssl_set_bio(&self.ssl_ctx, socket, c.mbedtls_net_send, c.mbedtls_net_recv, c.mbedtls_net_recv_timeout);
     }
 
+    // TODO add reset as well once it's needed
+    fn handshake(self: *Self) anyerror!void {
+        std.log.info("starting handshake...", .{});
+        const res = c.mbedtls_ssl_handshake(&self.*.ssl_ctx);
+        if (res == 0) {
+            std.log.info("handshake success!", .{});
+        } else {
+            const verify_result = c.mbedtls_ssl_get_verify_result(&self.*.ssl_ctx);
+            std.log.err("handshake error: {x}, verify result: {x}", .{ res, verify_result });
+            return GeminiError.Unknown;
+        }
+    }
+
     fn disconnect(self: *Self) void {
         if (self.*.net_ctx) |*net_ctx| {
             c.mbedtls_net_free(net_ctx);
@@ -307,18 +320,8 @@ pub fn main() anyerror!void {
         return GeminiError.Unknown;
     }
 
-    // do handshake
     try tls_ctx.connect(c_dest, c_port);
-
-    std.log.info("starting handshake...", .{});
-    res = c.mbedtls_ssl_handshake(&tls_ctx.ssl_ctx);
-    if (res == 0) {
-        std.log.info("handshake success!", .{});
-    } else {
-        const verify_result = c.mbedtls_ssl_get_verify_result(&tls_ctx.ssl_ctx);
-        std.log.err("handshake error: {x}, verify result: {x}", .{ res, verify_result });
-        return GeminiError.Unknown;
-    }
+    try tls_ctx.handshake();
 
     // send request
     const request = Request.init(dest);
