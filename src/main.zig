@@ -149,7 +149,10 @@ fn verify(ctx: ?*anyopaque, crt: ?*c.mbedtls_x509_crt, cert_depth: c_int, flags:
         const subjectBuf = crt.?.subject.val;
         const subject = subjectBuf.p[0..subjectBuf.len];
         std.log.warn("trusting self-signed crt for {s}", .{subject});
+        // add cert to chain so it passes verification next time
         appendCrt(ca_chain, crt.?);
+        // clear flags so it passes verification this time
+        flags.?.* = 0;
     } else {
         std.log.err("verify flags: {}", .{flagsVal});
     }
@@ -199,9 +202,10 @@ const TLSContext = struct {
     }
 
     fn disconnect(self: *Self) void {
-        assert(self.*.net_ctx != null);
-        c.mbedtls_net_free(&self.*.net_ctx.?);
-        self.*.net_ctx = null;
+        if (self.*.net_ctx) |*net_ctx| {
+            c.mbedtls_net_free(net_ctx);
+            self.*.net_ctx = null;
+        }
     }
 
     fn read(self: *Self) anyerror!Response {
@@ -234,10 +238,8 @@ const TLSContext = struct {
     }
 
     fn destroy(self: *Self) void {
+        self.disconnect();
         c.mbedtls_ssl_free(&self.*.ssl_ctx);
-        if (self.*.net_ctx != null) {
-            c.mbedtls_net_free(&self.*.net_ctx.?);
-        }
     }
 };
 
@@ -306,31 +308,16 @@ pub fn main() anyerror!void {
     }
 
     // do handshake
-    var attempts: i32 = 0;
-    while (true) {
-        if (attempts > 1) {
-            break;
-        }
+    try tls_ctx.connect(c_dest, c_port);
 
-        try tls_ctx.connect(c_dest, c_port);
-
-        std.log.info("starting handshake...", .{});
-        res = c.mbedtls_ssl_handshake(&tls_ctx.ssl_ctx);
-        if (res == 0) {
-            std.log.info("handshake success!", .{});
-            break;
-        }
+    std.log.info("starting handshake...", .{});
+    res = c.mbedtls_ssl_handshake(&tls_ctx.ssl_ctx);
+    if (res == 0) {
+        std.log.info("handshake success!", .{});
+    } else {
         const verify_result = c.mbedtls_ssl_get_verify_result(&tls_ctx.ssl_ctx);
         std.log.err("handshake error: {x}, verify result: {x}", .{ res, verify_result });
-        if (verify_result & c.MBEDTLS_X509_BADCERT_NOT_TRUSTED == 0) {
-            return GeminiError.Unknown;
-        }
-
-        assert(0 == c.mbedtls_ssl_session_reset(&tls_ctx.ssl_ctx));
-        std.log.info("trying handshake again...", .{});
-
-        tls_ctx.disconnect();
-        attempts += 1;
+        return GeminiError.Unknown;
     }
 
     // send request
