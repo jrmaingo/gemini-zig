@@ -55,6 +55,10 @@ const Response = struct {
 
     const Self = @This();
     const buffer_size = 1024;
+
+    fn getSlice(self: *const Self) []const u8 {
+        return self.*.data[0..self.*.bytes_read];
+    }
 };
 
 const GeminiError = error{ Unknown, Closed };
@@ -276,6 +280,7 @@ pub fn main() anyerror!void {
     }
     defer c.mbedtls_ssl_config_free(&ssl_config);
 
+    // TODO hide debug logs by default
     c.mbedtls_debug_set_threshold(1);
     c.mbedtls_ssl_conf_dbg(&ssl_config, debugLog, null);
 
@@ -346,12 +351,20 @@ pub fn main() anyerror!void {
     const meta_str = response_header.data[3..sentinel_index.?];
     std.log.info("response code {d}, meta: {s}\n", .{ status, meta_str });
 
+    // TODO support stdout by default
+    var cwd_path = std.mem.zeroes([1024]u8);
+    var cwd = try std.fs.openDirAbsolute(try std.os.getcwd(cwd_path[0..]), .{});
+    defer cwd.close();
+    const file = try cwd.createFile("output.txt", .{});
+    defer file.close();
+
     // read reponse body
     var response_size: usize = 0;
     while (tls_ctx.read()) |response_body| {
         std.log.info("response body read {}\n", .{response_body.bytes_read});
         response_size += response_body.bytes_read;
-        // TODO maybe stop if buffer isn't full?
+        const bytes_written = try file.write(response_body.getSlice());
+        assert(bytes_written == response_body.bytes_read);
     } else |err| {
         switch (err) {
             GeminiError.Unknown => std.log.err("failed to read response body {}", .{err}),
