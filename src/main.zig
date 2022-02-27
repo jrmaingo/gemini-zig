@@ -262,9 +262,23 @@ const TLSContext = struct {
     }
 };
 
+// just hard-code some max arg value for now
+const ArgArray = std.BoundedArray([:0]const u8, 1024);
+
 pub fn main() anyerror!void {
-    // TODO take input instead
-    const dest = "gemini.circumlunar.space/";
+    var args = std.process.args();
+    var arg_array = try ArgArray.init(0);
+    while (args.nextPosix()) |arg| {
+        try arg_array.append(arg);
+        std.log.info("arg: {s}", .{arg});
+    }
+
+    // Only support single positional arg for dest right now
+    // excludes the domain, no trailing '/'
+    // eg. gemini.circumlunar.space
+    assert(arg_array.len == 2);
+
+    const dest = arg_array.pop();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena.allocator;
@@ -321,7 +335,7 @@ pub fn main() anyerror!void {
     defer tls_ctx.destroy();
 
     // set hostname
-    const c_dest: [:0]const u8 = "gemini.circumlunar.space";
+    const c_dest: [:0]const u8 = dest;
     const c_port: [:0]const u8 = "1965";
     res = c.mbedtls_ssl_set_hostname(&tls_ctx.ssl_ctx, c_dest);
     if (res != 0) {
@@ -355,6 +369,7 @@ pub fn main() anyerror!void {
     var cwd_path = std.mem.zeroes([1024]u8);
     var cwd = try std.fs.openDirAbsolute(try std.os.getcwd(cwd_path[0..]), .{});
     defer cwd.close();
+    // TODO support custom output file name
     const file = try cwd.createFile("output.txt", .{});
     defer file.close();
 
