@@ -57,7 +57,7 @@ const Response = struct {
     const buffer_size = 1024;
 };
 
-const GeminiError = error{Unknown};
+const GeminiError = error{ Unknown, Closed };
 
 fn debugLog(ctx: ?*anyopaque, level: c_int, file: ?[*:0]const u8, line: c_int, msg: ?[*:0]const u8) callconv(.C) void {
     _ = ctx;
@@ -225,9 +225,11 @@ const TLSContext = struct {
         var data = std.mem.zeroes([1024]u8);
         const res = c.mbedtls_ssl_read(&self.*.ssl_ctx, &data, data.len);
         if (res > 0) {
-            std.log.info("response header received {}\n", .{res});
+            std.log.info("response received {}\n", .{res});
+        } else if (res == c.MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+            return GeminiError.Closed;
         } else {
-            std.log.err("response header read error {}\n", .{res});
+            std.log.err("response read error {}\n", .{res});
             return GeminiError.Unknown;
         }
 
@@ -293,6 +295,7 @@ pub fn main() anyerror!void {
     defer c.mbedtls_ctr_drbg_free(&rng_ctx);
 
     // setup ca chain
+    // TODO store and load previously trusted certs
     const c_crt_path: [:0]const u8 = "/etc/ssl/certs/";
     var ca_chain: c.mbedtls_x509_crt = undefined;
     c.mbedtls_x509_crt_init(&ca_chain);
@@ -327,36 +330,37 @@ pub fn main() anyerror!void {
     const request = Request.init(dest);
     try tls_ctx.send(&request);
 
-    // read response
-    const response = try tls_ctx.read();
+    // read response_header
+    const response_header = try tls_ctx.read();
 
     // parse response header
-    const status_str = response.data[0..2];
+    const status_str = response_header.data[0..2];
     const status = try std.fmt.parseUnsigned(u8, status_str, 10);
 
     assert(res < 1024);
-    const sentinel_index = std.mem.indexOf(u8, response.data[0..response.bytes_read], Request.requestSuffix);
+    const sentinel_index = std.mem.indexOf(u8, response_header.data[0..response_header.bytes_read], Request.requestSuffix);
     if (sentinel_index == null) {
         std.log.err("response missing sentinel\n", .{});
         return GeminiError.Unknown;
     }
-    const meta_str = response.data[3..sentinel_index.?];
+    const meta_str = response_header.data[3..sentinel_index.?];
     std.log.info("response code {d}, meta: {s}\n", .{ status, meta_str });
 
     // read reponse body
-    var response_data = std.mem.zeroes([1024]u8);
     var response_size: usize = 0;
-    while (res > 0) {
-        res = c.mbedtls_ssl_read(&tls_ctx.ssl_ctx, &response_data, response_data.len);
-        std.log.info("response body read {}\n", .{res});
-        response_size += @intCast(usize, res);
-        if (res < response_data.len) {
-            // we have hit the end
-            break;
+    while (tls_ctx.read()) |response_body| {
+        std.log.info("response body read {}\n", .{response_body.bytes_read});
+        response_size += response_body.bytes_read;
+        // TODO maybe stop if buffer isn't full?
+    } else |err| {
+        switch (err) {
+            GeminiError.Unknown => std.log.err("failed to read response body {}", .{err}),
+            GeminiError.Closed => std.log.info("done reading response body {}", .{err}),
+            else => unreachable,
         }
     }
 
-    if (res >= 0) {
+    if (response_size >= 0) {
         std.log.info("response body received {}\n", .{response_size});
     } else {
         std.log.err("response body read error {}\n", .{res});
