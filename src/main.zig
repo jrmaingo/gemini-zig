@@ -281,10 +281,7 @@ pub fn main() anyerror!void {
     const dest = arg_array.pop();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = &arena.allocator;
-
-    // intentionally unused right now
-    _ = allocator;
+    const allocator = arena.allocator();
 
     var ssl_config: c.mbedtls_ssl_config = undefined;
     c.mbedtls_ssl_config_init(&ssl_config);
@@ -335,7 +332,12 @@ pub fn main() anyerror!void {
     defer tls_ctx.destroy();
 
     // set hostname
-    const c_dest: [:0]const u8 = dest;
+    const hostname = std.mem.split(u8, dest, "/").next().?;
+    const c_hostname = try allocator.allocSentinel(u8, hostname.len, '\x00');
+    defer allocator.free(hostname);
+    std.mem.copy(u8, c_hostname, hostname);
+    std.log.info("hostname: {s}", .{c_hostname});
+    const c_dest: [:0]const u8 = c_hostname;
     const c_port: [:0]const u8 = "1965";
     res = c.mbedtls_ssl_set_hostname(&tls_ctx.ssl_ctx, c_dest);
     if (res != 0) {
@@ -376,23 +378,20 @@ pub fn main() anyerror!void {
     // read reponse body
     var response_size: usize = 0;
     while (tls_ctx.read()) |response_body| {
-        std.log.info("response body read {}\n", .{response_body.bytes_read});
         response_size += response_body.bytes_read;
         const bytes_written = try file.write(response_body.getSlice());
         assert(bytes_written == response_body.bytes_read);
+        if (response_body.bytes_read < response_body.data.len) {
+            std.log.info("done reading response body", .{});
+            break;
+        }
     } else |err| {
         switch (err) {
             GeminiError.Unknown => std.log.err("failed to read response body {}", .{err}),
             GeminiError.Closed => std.log.info("done reading response body {}", .{err}),
             else => unreachable,
         }
-    }
-
-    if (response_size >= 0) {
-        std.log.info("response body received {}\n", .{response_size});
-    } else {
-        std.log.err("response body read error {}\n", .{res});
-        return GeminiError.Unknown;
+        return err;
     }
 
     std.log.info("done!", .{});
