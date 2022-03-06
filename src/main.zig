@@ -265,6 +265,24 @@ const TLSContext = struct {
 // just hard-code some max arg value for now
 const ArgArray = std.BoundedArray([:0]const u8, 1024);
 
+const Options = struct {
+    output_file_path: ?[:0]const u8 = null,
+
+    // no easy way to define a literal with different sentinel
+    const output_file_flag = [_:0]u8{ '-', 'o' };
+
+    fn parseArgs(arg_array: ArgArray) Options {
+        var options = Options{};
+        for (arg_array.constSlice()) |arg, i| {
+            if (std.mem.eql(u8, output_file_flag[0..output_file_flag.len], arg)) {
+                // assume that output file is specified
+                options.output_file_path = arg_array.get(i + 1);
+            }
+        }
+        return options;
+    }
+};
+
 pub fn main() anyerror!void {
     var args = std.process.args();
     var arg_array = try ArgArray.init(0);
@@ -276,9 +294,10 @@ pub fn main() anyerror!void {
     // Only support single positional arg for dest right now
     // excludes the domain, no trailing '/'
     // eg. gemini.circumlunar.space
-    assert(arg_array.len == 2);
+    assert(arg_array.len >= 2);
 
     const dest = arg_array.pop();
+    const options = Options.parseArgs(arg_array);
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -367,13 +386,21 @@ pub fn main() anyerror!void {
     const meta_str = response_header.data[3..sentinel_index.?];
     std.log.info("response code {d}, meta: {s}\n", .{ status, meta_str });
 
-    // TODO support stdout by default
+    // TODO cleanup or avoid making it if stdout
     var cwd_path = std.mem.zeroes([1024]u8);
     var cwd = try std.fs.openDirAbsolute(try std.os.getcwd(cwd_path[0..]), .{});
     defer cwd.close();
-    // TODO support custom output file name
-    const file = try cwd.createFile("output.txt", .{});
-    defer file.close();
+
+    const file = if (options.output_file_path) |output_file_path| blk: {
+        // TODO support absolute paths too
+        break :blk try cwd.createFile(output_file_path, .{});
+    } else blk: {
+        // TODO separate logging when writing to stdout
+        break :blk std.io.getStdOut();
+    };
+    defer if (options.output_file_path != null) {
+        file.close();
+    };
 
     // read reponse body
     var response_size: usize = 0;
