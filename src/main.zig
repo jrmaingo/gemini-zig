@@ -267,9 +267,11 @@ const ArgArray = std.BoundedArray([:0]const u8, 1024);
 
 const Options = struct {
     output_file_path: ?[:0]const u8 = null,
+    is_verbose: bool = false,
 
     // no easy way to define a literal with different sentinel
     const output_file_flag = [_:0]u8{ '-', 'o' };
+    const verbose_flag = [_:0]u8{ '-', 'v' };
 
     fn parseArgs(arg_array: ArgArray) Options {
         var options = Options{};
@@ -277,6 +279,8 @@ const Options = struct {
             if (std.mem.eql(u8, output_file_flag[0..output_file_flag.len], arg)) {
                 // assume that output file is specified
                 options.output_file_path = arg_array.get(i + 1);
+            } else if (std.mem.eql(u8, verbose_flag[0..verbose_flag.len], arg)) {
+                options.is_verbose = true;
             }
         }
         return options;
@@ -291,7 +295,6 @@ pub fn main() anyerror!void {
         std.log.info("arg: {s}", .{arg});
     }
 
-    // Only support single positional arg for dest right now
     // excludes the domain, no trailing '/'
     // eg. gemini.circumlunar.space
     assert(arg_array.len >= 2);
