@@ -355,9 +355,8 @@ pub fn main() anyerror!void {
 
     // set hostname
     const hostname = std.mem.split(u8, dest, "/").next().?;
-    const c_hostname = try allocator.allocSentinel(u8, hostname.len, '\x00');
-    defer allocator.free(hostname);
-    std.mem.copy(u8, c_hostname, hostname);
+    const c_hostname = try std.cstr.addNullByte(allocator, hostname);
+    defer allocator.free(c_hostname);
     std.log.info("hostname: {s}", .{c_hostname});
     const c_dest: [:0]const u8 = c_hostname;
     const c_port: [:0]const u8 = "1965";
