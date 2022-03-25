@@ -11,12 +11,16 @@ pub fn build(b: *Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
+    const cflags = [_][]const u8{ "-Wall", "-Wextra", "-Werror" };
+
     const exe = b.addExecutable("gemini-zig", "src/main.zig");
     exe.setTarget(target);
     exe.linkLibC();
     exe.linkSystemLibrary("mbedtls");
     exe.linkSystemLibrary("mbedcrypto");
     exe.linkSystemLibrary("mbedx509");
+    exe.addIncludeDir("src");
+    exe.addCSourceFile("src/shim.c", &cflags);
     exe.setBuildMode(mode);
     exe.install();
 

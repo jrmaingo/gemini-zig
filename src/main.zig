@@ -7,6 +7,7 @@ const c = @cImport({
     @cInclude("mbedtls/entropy.h");
     @cInclude("mbedtls/ctr_drbg.h");
     @cInclude("mbedtls/debug.h");
+    @cInclude("shim.h");
 });
 
 const defaultPort: u16 = 1965;
@@ -305,17 +306,20 @@ pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
 
-    var ssl_config: c.mbedtls_ssl_config = undefined;
-    c.mbedtls_ssl_config_init(&ssl_config);
-    var res = c.mbedtls_ssl_config_defaults(&ssl_config, c.MBEDTLS_SSL_IS_CLIENT, c.MBEDTLS_SSL_TRANSPORT_STREAM, c.MBEDTLS_SSL_PRESET_DEFAULT);
+    // we need to rely on C to handle the bitfields in the struct
+    var ssl_config_buf = try allocator.alloc(u8, c.mbedtls_ssl_config_size);
+    defer allocator.free(ssl_config_buf);
+    var ssl_config = @ptrCast(*c.mbedtls_ssl_config, ssl_config_buf);
+    c.mbedtls_ssl_config_init(ssl_config);
+    var res = c.mbedtls_ssl_config_defaults(ssl_config, c.MBEDTLS_SSL_IS_CLIENT, c.MBEDTLS_SSL_TRANSPORT_STREAM, c.MBEDTLS_SSL_PRESET_DEFAULT);
     if (res != 0) {
         return GeminiError.Unknown;
     }
-    defer c.mbedtls_ssl_config_free(&ssl_config);
+    defer c.mbedtls_ssl_config_free(ssl_config);
 
     // TODO hide debug logs by default
     c.mbedtls_debug_set_threshold(1);
-    c.mbedtls_ssl_conf_dbg(&ssl_config, debugLog, null);
+    c.mbedtls_ssl_conf_dbg(ssl_config, debugLog, null);
 
     // setup rng
     var entropy_ctx: c.mbedtls_entropy_context = undefined;
@@ -329,7 +333,7 @@ pub fn main() anyerror!void {
         std.log.err("rng seed error: {x}", .{res});
         return GeminiError.Unknown;
     }
-    c.mbedtls_ssl_conf_rng(&ssl_config, c.mbedtls_ctr_drbg_random, &rng_ctx);
+    c.mbedtls_ssl_conf_rng(ssl_config, c.mbedtls_ctr_drbg_random, &rng_ctx);
     defer c.mbedtls_ctr_drbg_free(&rng_ctx);
 
     // setup ca chain
@@ -345,12 +349,12 @@ pub fn main() anyerror!void {
     //printCrtInfo(&ca_chain);
     // TODO do I need a revocation list?
     const ca_crl: ?*c.mbedtls_x509_crl = null;
-    c.mbedtls_ssl_conf_ca_chain(&ssl_config, &ca_chain, ca_crl);
+    c.mbedtls_ssl_conf_ca_chain(ssl_config, &ca_chain, ca_crl);
 
-    c.mbedtls_ssl_conf_verify(&ssl_config, verify, &ca_chain);
+    c.mbedtls_ssl_conf_verify(ssl_config, verify, &ca_chain);
 
     // create ssl context
-    var tls_ctx = try TLSContext.init(&ssl_config);
+    var tls_ctx = try TLSContext.init(ssl_config);
     defer tls_ctx.destroy();
 
     // set hostname
