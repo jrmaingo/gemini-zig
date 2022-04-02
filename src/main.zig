@@ -307,7 +307,7 @@ pub fn main() anyerror!void {
     const allocator = arena.allocator();
 
     // we need to rely on C to handle the bitfields in the struct
-    var ssl_config_buf = try allocator.alloc(u8, c.mbedtls_ssl_config_size);
+    var ssl_config_buf = try allocator.allocWithOptions(u8, c.mbedtls_ssl_config_size, @alignOf(c.mbedtls_ssl_config), null);
     defer allocator.free(ssl_config_buf);
     var ssl_config = @ptrCast(*c.mbedtls_ssl_config, ssl_config_buf);
     c.mbedtls_ssl_config_init(ssl_config);
