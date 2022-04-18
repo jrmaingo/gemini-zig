@@ -288,6 +288,21 @@ const Options = struct {
     }
 };
 
+pub const log_level = std.log.Level.info;
+var is_verbose = false;
+
+pub fn log(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    // zig doesn't give us a context here so I'm just using global state
+    if (@enumToInt(level) <= @enumToInt(std.log.Level.err) or is_verbose) {
+        std.log.defaultLog(level, scope, format, args);
+    }
+}
+
 pub fn main() anyerror!void {
     var args = std.process.args();
     var arg_array = try ArgArray.init(0);
@@ -317,8 +332,13 @@ pub fn main() anyerror!void {
     }
     defer c.mbedtls_ssl_config_free(ssl_config);
 
-    // TODO hide debug logs by default
-    c.mbedtls_debug_set_threshold(1);
+    // hide debug logs by default
+    if (options.is_verbose) {
+        c.mbedtls_debug_set_threshold(3);
+        is_verbose = true;
+    } else {
+        c.mbedtls_debug_set_threshold(1);
+    }
     c.mbedtls_ssl_conf_dbg(ssl_config, debugLog, null);
 
     // setup rng
